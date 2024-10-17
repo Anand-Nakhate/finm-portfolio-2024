@@ -1293,7 +1293,6 @@ def calc_iterative_regression(
     Returns:
     pd.DataFrame: Summary statistics for each asset regression.
     """
-    raise Exception("Function not available - needs testing prior to use")
     multiple_y = multiple_y.copy()
     X = X.copy()
 
@@ -1616,6 +1615,21 @@ def create_portfolio(
     return port_returns
 
 
+def calc_ewma_volatility(
+        excess_returns: pd.Series,
+        theta : float = 0.94,
+        initial_vol : float = .2 / np.sqrt(252)
+    ) -> pd.Series:
+    var_t0 = initial_vol ** 2
+    ewma_var = [var_t0]
+    for i in range(len(excess_returns.index)):
+        new_ewma_var = ewma_var[-1] * theta + (excess_returns.iloc[i] ** 2) * (1 - theta)
+        ewma_var.append(new_ewma_var)
+    ewma_var.pop(0) # Remove var_t0
+    ewma_vol = [np.sqrt(v) for v in ewma_var]
+    return pd.Series(ewma_vol, index=excess_returns.index)
+
+
 def calc_var_cvar_summary(
     returns: Union[pd.Series, pd.DataFrame],
     quantile: Union[None, float] = .05,
@@ -1626,11 +1640,13 @@ def calc_var_cvar_summary(
     z_score: float = None,
     shift: int = 1,
     normal_vol_formula: bool = False,
+    ewma_theta : float = .94,
+    ewma_initial_vol : float = .2 / np.sqrt(252),
     keep_columns: Union[list, str] = None,
     drop_columns: Union[list, str] = None,
     keep_indexes: Union[list, str] = None,
     drop_indexes: Union[list, str] = None,
-    drop_before_keep: bool = False
+    drop_before_keep: bool = False,
 ):
     """
     Calculates a summary of VaR (Value at Risk) and CVaR (Conditional VaR) for the provided returns.
@@ -1654,7 +1670,6 @@ def calc_var_cvar_summary(
     Returns:
     pd.DataFrame: Summary of VaR and CVaR statistics.
     """
-    raise Exception("Function not available - needs testing prior to use")
     if window is None:
         print('Using "window" of 60 periods, since none was specified')
         window = 60
@@ -1677,17 +1692,20 @@ def calc_var_cvar_summary(
     else:
         summary[f'Expanding {window:.0f} Volatility'] = np.sqrt((returns ** 2).expanding(window).mean())
         summary[f'Rolling {window:.0f} Volatility'] = np.sqrt((returns ** 2).rolling(window).mean())
+    summary[f'EWMA {ewma_theta:.2f} Volatility'] = calc_ewma_volatility(returns, theta=ewma_theta, initial_vol=ewma_initial_vol)
 
     z_score = norm.ppf(quantile) if z_score is None else z_score
     summary[f'Expanding {window:.0f} Parametric VaR ({quantile:.2%})'] = summary[f'Expanding {window:.0f} Volatility'] * z_score
     summary[f'Rolling {window:.0f} Parametric VaR ({quantile:.2%})'] = summary[f'Rolling {window:.0f} Volatility'] * z_score
+    summary[f'EWMA {ewma_theta:.2f} Parametric VaR ({quantile:.2%})'] = summary[f'EWMA {ewma_theta:.2f} Volatility'] * z_score
 
     if return_hit_ratio:
         shift_stats = [
             f'Expanding {window:.0f} Historical VaR ({quantile:.2%})',
             f'Rolling {window:.0f} Historical VaR ({quantile:.2%})',
             f'Expanding {window:.0f} Parametric VaR ({quantile:.2%})',
-            f'Rolling {window:.0f} Parametric VaR ({quantile:.2%})'
+            f'Rolling {window:.0f} Parametric VaR ({quantile:.2%})',
+            f'EWMA {ewma_theta:.2f} Parametric VaR ({quantile:.2%})',
         ]
         summary_shift = summary.copy()
         summary_shift[shift_stats] = summary_shift[shift_stats].shift()
@@ -1711,13 +1729,14 @@ def calc_var_cvar_summary(
     summary[f'Rolling {window:.0f} Historical CVaR ({quantile:.2%})'] = returns.rolling(window).apply(lambda x: x[x < x.quantile(quantile)].mean())
     summary[f'Expanding {window:.0f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'Expanding {window:.0f} Volatility']
     summary[f'Rolling {window:.0f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'Rolling {window:.0f} Volatility']
+    summary[f'EWMA {ewma_theta:.2f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'EWMA {ewma_theta:.2f} Volatility']
 
     if shift > 0:
         shift_columns = [c for c in summary.columns if not bool(re.search("returns", c))]
         summary[shift_columns] = summary[shift_columns].shift(shift)
         print(f'VaR and CVaR are given shifted by {shift:0f} period(s).')
     else:
-        print('VaR and CVaR are given in-sample, as specified by the formula.')
+        print('VaR and CVaR are given in-sample.')
 
     if full_time_sample:
         summary = summary.loc[:, lambda df: [c for c in df.columns if bool(re.search('expanding', c.lower()))]]
