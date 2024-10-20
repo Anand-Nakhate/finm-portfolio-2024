@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from arch import arch_model
 import math
 import datetime
 pd.options.display.float_format = "{:,.4f}".format
@@ -1630,11 +1631,34 @@ def calc_ewma_volatility(
     return pd.Series(ewma_vol, index=excess_returns.index)
 
 
+def calc_garch_volatility(
+        excess_returs: pd.Series,
+        p: int = 1,
+        q: int = 1
+    ) -> pd.Series:
+    model = arch_model(excess_returs, vol='Garch', p=p, q=q)
+    fitted_model = model.fit(disp='off')
+    fitted_values = fitted_model.conditional_volatility
+    return fitted_values
+
+
+def calc_garch_volatility(
+        excess_returs: pd.Series,
+        p: int = 1,
+        q: int = 1
+    ):
+    model = arch_model(excess_returs, vol='Garch', p=p, q=q)
+    fitted_model = model.fit(disp='off')
+    fitted_values = fitted_model.conditional_volatility
+    return pd.Series(fitted_values, index=excess_returs.index)
+
+
 def calc_var_cvar_summary(
     returns: Union[pd.Series, pd.DataFrame],
     quantile: Union[None, float] = .05,
     window: Union[None, str] = None,
     return_hit_ratio: bool = False,
+    filter_first_hit_ratio_date: Union[None, str, datetime.date] = None,
     return_stats: Union[str, list] = ['Returns', 'VaR', 'CVaR', 'Vol'],
     full_time_sample: bool = False,
     z_score: float = None,
@@ -1642,6 +1666,8 @@ def calc_var_cvar_summary(
     normal_vol_formula: bool = False,
     ewma_theta : float = .94,
     ewma_initial_vol : float = .2 / np.sqrt(252),
+    garch_p: int = 1,
+    garch_q: int = 1,
     keep_columns: Union[list, str] = None,
     drop_columns: Union[list, str] = None,
     keep_indexes: Union[list, str] = None,
@@ -1693,11 +1719,13 @@ def calc_var_cvar_summary(
         summary[f'Expanding {window:.0f} Volatility'] = np.sqrt((returns ** 2).expanding(window).mean())
         summary[f'Rolling {window:.0f} Volatility'] = np.sqrt((returns ** 2).rolling(window).mean())
     summary[f'EWMA {ewma_theta:.2f} Volatility'] = calc_ewma_volatility(returns, theta=ewma_theta, initial_vol=ewma_initial_vol)
+    summary[f'GARCH({garch_p:.0f}, {garch_q:.0f}) Volatility'] = calc_garch_volatility(returns, p=garch_p, q=garch_q)
 
     z_score = norm.ppf(quantile) if z_score is None else z_score
     summary[f'Expanding {window:.0f} Parametric VaR ({quantile:.2%})'] = summary[f'Expanding {window:.0f} Volatility'] * z_score
     summary[f'Rolling {window:.0f} Parametric VaR ({quantile:.2%})'] = summary[f'Rolling {window:.0f} Volatility'] * z_score
     summary[f'EWMA {ewma_theta:.2f} Parametric VaR ({quantile:.2%})'] = summary[f'EWMA {ewma_theta:.2f} Volatility'] * z_score
+    summary[f'GARCH({garch_p:.0f}, {garch_q:.0f}) Parametric VaR ({quantile:.2%})'] = summary[f'GARCH({garch_p:.0f}, {garch_q:.0f}) Volatility'] * z_score
 
     if return_hit_ratio:
         shift_stats = [
@@ -1706,9 +1734,14 @@ def calc_var_cvar_summary(
             f'Expanding {window:.0f} Parametric VaR ({quantile:.2%})',
             f'Rolling {window:.0f} Parametric VaR ({quantile:.2%})',
             f'EWMA {ewma_theta:.2f} Parametric VaR ({quantile:.2%})',
+            f'GARCH({garch_p:.0f}, {garch_q:.0f}) Parametric VaR ({quantile:.2%})'
         ]
         summary_shift = summary.copy()
         summary_shift[shift_stats] = summary_shift[shift_stats].shift()
+        if filter_first_hit_ratio_date:
+            if isinstance(filter_first_hit_ratio_date, (datetime.date, datetime.datetime)):
+                filter_first_hit_ratio_date = filter_first_hit_ratio_date.strftime("%Y-%m-%d")
+            summary_shift = summary_shift.loc[filter_first_hit_ratio_date:]
         summary_shift = summary_shift.dropna(axis=0)
         summary_shift[shift_stats] = summary_shift[shift_stats].apply(lambda x: (x - summary_shift['Returns']) > 0)
         hit_ratio = pd.DataFrame(summary_shift[shift_stats].mean(), columns=['Hit Ratio'])
@@ -1730,6 +1763,7 @@ def calc_var_cvar_summary(
     summary[f'Expanding {window:.0f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'Expanding {window:.0f} Volatility']
     summary[f'Rolling {window:.0f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'Rolling {window:.0f} Volatility']
     summary[f'EWMA {ewma_theta:.2f} Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'EWMA {ewma_theta:.2f} Volatility']
+    summary[f'GARCH({garch_p:.0f}, {garch_q:.0f}) Parametrical CVaR ({quantile:.2%})'] = - norm.pdf(z_score) / quantile * summary[f'GARCH({garch_p:.0f}, {garch_q:.0f}) Volatility']
 
     if shift > 0:
         shift_columns = [c for c in summary.columns if not bool(re.search("returns", c))]
