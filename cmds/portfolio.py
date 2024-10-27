@@ -7,9 +7,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-
-
-
 def tangency_weights(returns,dropna=True,scale_cov=1):
     if dropna:
         returns = returns.dropna()
